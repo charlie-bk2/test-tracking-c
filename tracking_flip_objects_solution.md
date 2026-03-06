@@ -187,3 +187,56 @@ for frame in stream:
 5. ID Switch 监控面板
 
 该 MVP 往往已经可覆盖多数“翻面后继续追踪”需求，后续再按误差案例补充 ReID 与多传感器融合。
+
+---
+
+## 9. “100%追踪成功”落地策略（工程可执行版）
+
+> 结论先行：在开放场景里无法数学保证 100%，但在**受控工位**可通过“流程约束 + 算法硬门控”做到工程上 100%（回归集 0 次 ID Switch）。
+
+### 9.1 约束前提（必须满足）
+1. 物体运行在固定通道（lane）内，不允许跨通道。
+2. 速度有明确上限 `v_max`，相机 FPS 与快门足以覆盖位移。
+3. 工艺上禁止超车/穿插（No-Crossing）。
+4. 遮挡时长不超过 `max_missed` 对应时间窗。
+
+只要违反以上任一前提，就应降级为“高成功率”而非“100%保证”。
+
+### 9.2 策略优化点（相较通用 MOT）
+1. **关联优先级重排**：运动与几何约束 > 外观相似度。
+2. **强门控**：超速、越 lane、顺序反转直接拒绝匹配。
+3. **翻面状态机**：进入 Back 后，禁用外观主导匹配。
+4. **冲突处理保守化**：宁可新建轨迹 + 告警，也不允许错绑 ID。
+
+### 9.3 已编码实现
+仓库新增 `deterministic_flip_tracker.py`，实现了：
+- 目标结构：`Detection`、`Track`、`FaceState`
+- 核心跟踪器：`DeterministicFlipTracker`
+- 关键机制：
+  - 最大速度门控
+  - Lane 门控
+  - No-Crossing（顺序不反转）约束
+  - Front/Flip/Back 状态机
+
+并新增 `test_deterministic_flip_tracker.py` 验证：
+- 翻面后持续追踪保持 ID 不变
+- 交叉反转时拒绝错误匹配
+
+### 9.4 使用示例
+```python
+from deterministic_flip_tracker import Detection, DeterministicFlipTracker
+
+tracker = DeterministicFlipTracker(
+    max_speed=20.0,
+    lane_centers_y=[120, 240],
+    lane_tolerance=10,
+    max_missed=8,
+)
+
+tracks = tracker.step([
+    Detection(100, 120, face_prob=0.9),
+    Detection(180, 120, face_prob=0.1),
+])
+```
+
+> 建议：上线时把“被硬门控拒绝的检测”接入告警看板，用于反向定位工艺异常（超速、串道、交叉）。
